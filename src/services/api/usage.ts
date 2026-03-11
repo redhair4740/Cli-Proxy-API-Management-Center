@@ -22,6 +22,31 @@ export interface UsageImportResponse {
   [key: string]: unknown;
 }
 
+export interface CleanupFailedUsagePayload {
+  mode: 'all_failed' | 'polling_failed';
+  scope: {
+    timeRangeDays?: 1 | 7 | 14 | 30;
+    startTime?: string;
+    endTime?: string;
+    apiQuery?: string;
+    apiKeys?: string[];
+    models?: string[];
+    sources?: string[];
+  };
+  match: {
+    status: 'failed';
+    groupBy: ['source', 'model'];
+    windowMinutes: number;
+    minRepeatCount: number;
+  };
+}
+
+export interface CleanupFailedUsageResponse {
+  deletedCount?: number;
+  affectedGroups?: number;
+  [key: string]: unknown;
+}
+
 export const usageApi = {
   /**
    * 获取使用统计原始数据
@@ -38,6 +63,12 @@ export const usageApi = {
    */
   importUsage: (payload: unknown) =>
     apiClient.post<UsageImportResponse>('/usage/import', payload, { timeout: USAGE_TIMEOUT_MS }),
+
+  /**
+   * 清理失败请求
+   */
+  cleanupFailedRequests: (payload: CleanupFailedUsagePayload) =>
+    apiClient.post<CleanupFailedUsageResponse>('/usage/cleanup-failures', payload, { timeout: USAGE_TIMEOUT_MS }),
 
   /**
    * 计算密钥成功/失败统计，必要时会先获取 usage 数据

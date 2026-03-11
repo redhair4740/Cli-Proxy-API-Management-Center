@@ -90,6 +90,7 @@ export function MonitorPage() {
   const [providerTypeMap, setProviderTypeMap] = useState<Record<string, string>>({});
   const [sourceInfoMap, setSourceInfoMap] = useState<Map<string, import('@/types/sourceInfo').SourceInfo>>(new Map());
   const [authFileMap, setAuthFileMap] = useState<Map<string, CredentialInfo>>(new Map());
+  const [cleanupRequestToken, setCleanupRequestToken] = useState(0);
 
   // 加载渠道名称映射（支持所有提供商类型）
   const loadProviderMap = useCallback(async () => {
@@ -316,6 +317,10 @@ export function MonitorPage() {
     loadData();
   };
 
+  const handleCleanupRequest = () => {
+    setCleanupRequestToken((token) => token + 1);
+  };
+
   return (
     <div className={styles.container}>
       {loading && !usageData && (
@@ -331,6 +336,14 @@ export function MonitorPage() {
       <div className={styles.header}>
         <h1 className={styles.pageTitle}>{t('monitor.title')}</h1>
         <div className={styles.headerActions}>
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={handleCleanupRequest}
+            disabled={loading || !filteredData}
+          >
+            {t('monitor.logs.cleanup_button')}
+          </Button>
           <Button
             variant="secondary"
             size="sm"
@@ -404,6 +417,8 @@ export function MonitorPage() {
         sourceInfoMap={sourceInfoMap}
         authFileMap={authFileMap}
         apiFilter={apiFilter}
+        cleanupRequestToken={cleanupRequestToken}
+        onCleanupSuccess={loadData}
       />
     </div>
   );

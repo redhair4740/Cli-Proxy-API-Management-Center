@@ -823,6 +823,14 @@
   }
 }
 
+.logsToolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .logSelect {
   padding: 6px 10px;
   border-radius: $radius-md;
@@ -857,6 +865,114 @@
     text-align: center;
     font-size: 11px;
   }
+}
+
+.cleanupModalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.cleanupDescription {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.cleanupSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+
+  @include mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cleanupStat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: $radius-md;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+
+  strong {
+    font-size: 18px;
+  }
+}
+
+.cleanupStatLabel {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.cleanupModeList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cleanupModeItem {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-secondary);
+  cursor: pointer;
+
+  input {
+    margin-top: 2px;
+  }
+}
+
+.cleanupModeTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cleanupModeHint {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.cleanupScope {
+  padding: 12px;
+  border-radius: $radius-md;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.cleanupScopeTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.cleanupScopeList {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cleanupActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 // 分页

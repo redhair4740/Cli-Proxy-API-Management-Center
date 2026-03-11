@@ -2,13 +2,16 @@ import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
 import { usageApi, authFilesApi } from '@/services/api';
 import { useDisableModel } from '@/hooks';
+import { useNotificationStore } from '@/stores/useNotificationStore';
 import { normalizeUsageSourceId, normalizeAuthIndex } from '@/utils/usage';
 import { resolveSourceDisplay } from '@/utils/sourceResolver';
 import type { SourceInfo, CredentialInfo } from '@/types/sourceInfo';
 import { TimeRangeSelector, formatTimeRangeCaption, type TimeRange } from './TimeRangeSelector';
 import { DisableModelModal } from './DisableModelModal';
+import { CleanupFailedRequestsModal, type CleanupMode } from './CleanupFailedRequestsModal';
 import {
   maskSecret,
   formatProviderDisplay,
@@ -28,6 +31,8 @@ interface RequestLogsProps {
   sourceInfoMap: Map<string, SourceInfo>;
   authFileMap?: Map<string, CredentialInfo>;
   apiFilter: string;
+  cleanupRequestToken?: number;
+  onCleanupSuccess?: () => Promise<void> | void;
 }
 
 interface LogEntry {
@@ -62,9 +67,22 @@ interface PrecomputedStats {
 
 // 虚拟滚动行高
 const ROW_HEIGHT = 40;
+const POLLING_WINDOW_MINUTES = 5;
+const POLLING_MIN_REPEAT_COUNT = 3;
 
-export function RequestLogs({ data, loading: parentLoading, providerMap, providerTypeMap, sourceInfoMap, authFileMap: propAuthFileMap, apiFilter }: RequestLogsProps) {
+export function RequestLogs({
+  data,
+  loading: parentLoading,
+  providerMap,
+  providerTypeMap,
+  sourceInfoMap,
+  authFileMap: propAuthFileMap,
+  apiFilter,
+  cleanupRequestToken = 0,
+  onCleanupSuccess,
+}: RequestLogsProps) {
   const { t } = useTranslation();
+  const showNotification = useNotificationStore((state) => state.showNotification);
   const [filterApi, setFilterApi] = useState('');
   const [filterModel, setFilterModel] = useState('');
   const [filterSource, setFilterSource] = useState('');
@@ -96,6 +114,9 @@ export function RequestLogs({ data, loading: parentLoading, providerMap, provide
   const [logData, setLogData] = useState<UsageData | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
+  const [cleanupModalOpen, setCleanupModalOpen] = useState(false);
+  const [cleanupMode, setCleanupMode] = useState<CleanupMode>('polling_failed');
+  const [cleanupLoading, setCleanupLoading] = useState(false);
 
   // 认证文件映射（优先使用 prop，否则自行加载）
   const [localAuthFileMap, setLocalAuthFileMap] = useState<Map<string, CredentialInfo>>(new Map());
@@ -431,6 +452,197 @@ export function RequestLogs({ data, loading: parentLoading, providerMap, provide
     });
   }, [logEntries, filterApi, filterModel, filterSource, filterStatus, filterProviderType]);
 
+  const cleanupScopedEntries = useMemo(() => {
+    return logEntries.filter((entry) => {
+      if (filterApi && entry.apiKey !== filterApi) return false;
+      if (filterModel && entry.model !== filterModel) return false;
+      if (filterSource && entry.source !== filterSource) return false;
+      if (filterProviderType && entry.providerType !== filterProviderType) return false;
+      return true;
+    });
+  }, [logEntries, filterApi, filterModel, filterSource, filterProviderType]);
+
+  const cleanupFailedEntries = useMemo(
+    () => cleanupScopedEntries.filter((entry) => entry.failed),
+    [cleanupScopedEntries]
+  );
+
+  const pollingStats = useMemo(() => {
+    const groups = new Map<string, LogEntry[]>();
+
+    cleanupFailedEntries.forEach((entry) => {
+      const key = `${entry.source}|||${entry.model}`;
+      const list = groups.get(key);
+      if (list) {
+        list.push(entry);
+      } else {
+        groups.set(key, [entry]);
+      }
+    });
+
+    let candidateCount = 0;
+    let affectedGroupCount = 0;
+    const windowMs = POLLING_WINDOW_MINUTES * 60 * 1000;
+
+    groups.forEach((entries) => {
+      const sortedEntries = [...entries].sort((a, b) => a.timestampMs - b.timestampMs);
+      let clusterStart = 0;
+
+      for (let index = 0; index < sortedEntries.length; index += 1) {
+        while (
+          clusterStart < index &&
+          sortedEntries[index].timestampMs - sortedEntries[clusterStart].timestampMs > windowMs
+        ) {
+          clusterStart += 1;
+        }
+
+        const clusterSize = index - clusterStart + 1;
+        if (clusterSize >= POLLING_MIN_REPEAT_COUNT) {
+          candidateCount += clusterSize;
+          affectedGroupCount += 1;
+          break;
+        }
+      }
+    });
+
+    return {
+      candidateCount,
+      affectedGroupCount,
+    };
+  }, [cleanupFailedEntries]);
+
+  const cleanupSummaryItems = useMemo(() => {
+    const rangeLabel = formatTimeRangeCaption(timeRange, customRange, t);
+    const apiQueryLabel = apiFilter || t('monitor.logs.cleanup_any');
+    const apiLabel = filterApi ? maskSecret(filterApi) : t('monitor.logs.cleanup_any');
+    const modelLabel = filterModel || t('monitor.logs.cleanup_any');
+    const sourceLabel = filterSource
+      ? formatProviderDisplay(filterSource, providerMap)
+      : t('monitor.logs.cleanup_any');
+    const providerTypeLabel = filterProviderType || t('monitor.logs.cleanup_any');
+
+    return [
+      t('monitor.logs.cleanup_scope_time', { value: rangeLabel }),
+      t('monitor.logs.cleanup_scope_api_query', { value: apiQueryLabel }),
+      t('monitor.logs.cleanup_scope_api', { value: apiLabel }),
+      t('monitor.logs.cleanup_scope_model', { value: modelLabel }),
+      t('monitor.logs.cleanup_scope_source', { value: sourceLabel }),
+      t('monitor.logs.cleanup_scope_provider_type', { value: providerTypeLabel }),
+      t('monitor.logs.cleanup_scope_rule', {
+        minutes: POLLING_WINDOW_MINUTES,
+        count: POLLING_MIN_REPEAT_COUNT,
+      }),
+    ];
+  }, [apiFilter, customRange, filterApi, filterModel, filterProviderType, filterSource, providerMap, t, timeRange]);
+
+  const openCleanupModal = useCallback(() => {
+    setCleanupMode('polling_failed');
+    setCleanupModalOpen(true);
+  }, []);
+
+  const closeCleanupModal = useCallback(() => {
+    if (cleanupLoading) return;
+    setCleanupModalOpen(false);
+  }, [cleanupLoading]);
+
+  const externalCleanupRequestRef = useRef(cleanupRequestToken);
+  useEffect(() => {
+    if (cleanupRequestToken === externalCleanupRequestRef.current) {
+      return;
+    }
+    externalCleanupRequestRef.current = cleanupRequestToken;
+    openCleanupModal();
+  }, [cleanupRequestToken, openCleanupModal]);
+
+  const handleCleanupConfirm = useCallback(async () => {
+    if (cleanupLoading) return;
+
+    setCleanupLoading(true);
+    try {
+      const scope: {
+        timeRangeDays?: 1 | 7 | 14 | 30;
+        startTime?: string;
+        endTime?: string;
+        apiQuery?: string;
+        apiKeys?: string[];
+        models?: string[];
+        sources?: string[];
+      } = {
+        apiQuery: apiFilter || undefined,
+        apiKeys: filterApi ? [filterApi] : undefined,
+        models: filterModel ? [filterModel] : undefined,
+      };
+
+      const scopedSources = filterSource
+        ? [filterSource]
+        : filterProviderType
+          ? Array.from(
+            new Set(
+              cleanupScopedEntries
+                .filter((entry) => entry.providerType === filterProviderType)
+                .map((entry) => entry.source)
+            )
+          )
+          : undefined;
+
+      if (scopedSources && scopedSources.length > 0) {
+        scope.sources = scopedSources;
+      }
+
+      if (timeRange === 'custom' && customRange) {
+        scope.startTime = customRange.start.toISOString();
+        scope.endTime = customRange.end.toISOString();
+      } else if (typeof timeRange === 'number') {
+        scope.timeRangeDays = timeRange;
+      }
+
+      const response = await usageApi.cleanupFailedRequests({
+        mode: cleanupMode,
+        scope,
+        match: {
+          status: 'failed',
+          groupBy: ['source', 'model'],
+          windowMinutes: POLLING_WINDOW_MINUTES,
+          minRepeatCount: POLLING_MIN_REPEAT_COUNT,
+        },
+      });
+
+      const deletedCount = Number(response?.deletedCount ?? 0);
+      showNotification(
+        t('monitor.logs.cleanup_success', { count: deletedCount.toLocaleString() }),
+        'success'
+      );
+
+      setCleanupModalOpen(false);
+      await fetchLogData();
+      if (onCleanupSuccess) {
+        await onCleanupSuccess();
+      }
+    } catch (err) {
+      showNotification(
+        err instanceof Error ? err.message : t('monitor.logs.cleanup_error'),
+        'error'
+      );
+    } finally {
+      setCleanupLoading(false);
+    }
+  }, [
+    apiFilter,
+    cleanupLoading,
+    cleanupMode,
+    cleanupScopedEntries,
+    customRange,
+    fetchLogData,
+    filterApi,
+    filterModel,
+    filterProviderType,
+    filterSource,
+    onCleanupSuccess,
+    showNotification,
+    t,
+    timeRange,
+  ]);
+
   // 虚拟滚动配置
   const rowVirtualizer = useVirtualizer({
     count: filteredEntries.length,
@@ -540,11 +752,21 @@ export function RequestLogs({ data, loading: parentLoading, providerMap, provide
           </span>
         }
         extra={
-          <TimeRangeSelector
-            value={timeRange}
-            onChange={handleTimeRangeChange}
-            customRange={customRange}
-          />
+          <div className={styles.logsToolbar}>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={openCleanupModal}
+              disabled={cleanupFailedEntries.length === 0}
+            >
+              {t('monitor.logs.cleanup_button')}
+            </Button>
+            <TimeRangeSelector
+              value={timeRange}
+              onChange={handleTimeRangeChange}
+              customRange={customRange}
+            />
+          </div>
         }
       >
         {/* 筛选器 */}
@@ -715,6 +937,19 @@ export function RequestLogs({ data, loading: parentLoading, providerMap, provide
         disabling={disabling}
         onConfirm={handleConfirmDisable}
         onCancel={handleCancelDisable}
+      />
+
+      <CleanupFailedRequestsModal
+        open={cleanupModalOpen}
+        mode={cleanupMode}
+        loading={cleanupLoading}
+        failedCount={cleanupFailedEntries.length}
+        pollingCandidateCount={pollingStats.candidateCount}
+        affectedGroups={pollingStats.affectedGroupCount}
+        summaryItems={cleanupSummaryItems}
+        onModeChange={setCleanupMode}
+        onConfirm={handleCleanupConfirm}
+        onCancel={closeCleanupModal}
       />
     </>
   );
