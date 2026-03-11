@@ -609,7 +609,7 @@ export function RequestLogs({
 
       const deletedCount = Number(response?.deletedCount ?? 0);
       showNotification(
-        t('monitor.logs.cleanup_success', { count: deletedCount.toLocaleString() }),
+        t('monitor.logs.cleanup_success', { count: deletedCount }),
         'success'
       );
 
